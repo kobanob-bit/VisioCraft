@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VisioCraft (Wasm版)</title>
+    <script src="visiocraft.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 15px;
+        }
+        .toolbar {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .toolbar-group {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            background: #f0f0f0;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+        .responsive-box {
+            display: flex;
+            gap: 15px;
+            width: 100%;
+        }
+        .canvas-panel-left {
+            flex: 2;
+            min-width: 0;
+        }
+        .canvas-panel-right {
+            flex: 1;
+            min-width: 0;
+        }
+        @media (max-width: 768px) {
+            .responsive-box {
+                flex-direction: column;
+            }
+        }
+
+        /* ボタンのアクティブ（選択状態）スタイル */
+        .btn-pt, .btn-step {
+            min-width: 32px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .btn-pt.active, .btn-step.active {
+            background-color: #2979FF;
+            color: #fff;
+            border-color: #0056b3;
+        }
+
+        /* スライダー周りの調整 */
+        .slider-label {
+            font-size: 13px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .slider-label input[type="range"] {
+            width: 80px;
+            cursor: pointer;
+        }
+        .val-disp {
+            min-width: 28px;
+            text-align: right;
+            font-weight: normal;
+        }
+
+        /* 画面表示時のキャンバス設定 */
+        canvas {
+            width: 100%;
+            height: auto;
+            max-width: 100%;
+            display: block;
+            box-sizing: border-box;
+            border: 1px solid #ccc;
+        }
+
+        #canvas-left {
+            cursor: crosshair;
+            touch-action: none;
+        }
+
+        /* 印刷用スタイル */
+        @page {
+            margin: 0;
+        }
+        @media print {
+            html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+                background: #fff;
+                overflow: hidden;
+            }
+            .toolbar, .canvas-panel-left, #status-text, h3 {
+                display: none !important;
+            }
+            .responsive-box, .canvas-panel-right {
+                display: flex !important;
+                justify-content: center !important;
+                align-items: center !important;
+                width: 100vw !important;
+                height: 100vh !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            #canvas-right {
+                border: none !important;
+                max-width: 100vw !important;
+                max-height: 100vh !important;
+                width: 100% !important;
+                height: 100% !important;
+                object-fit: contain;
+                display: block !important;
+                margin: auto !important;
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+    <input type="file" id="file-input" accept="image/*,.heic,.heif" style="display:none;">
+    <input type="file" id="json-input" accept=".json" style="display:none;">
+
+    <!-- メインツールバー -->
+    <div class="toolbar">
+        <button id="btn-open">画像を開く</button>
+        <button id="btn-rot-l">↺ 左90°</button>
+        <button id="btn-rot-r">↻ 右90°</button>
+        <button id="btn-load-json">座標読込</button>
+        <button id="btn-save-json">座標保存</button>
+        <button id="btn-save-img">変換画像を保存</button>
+        <button id="btn-print">印刷</button>
+        <label><input type="checkbox" id="chk-fold"> 折り目ガイド線</label>
+        <label><input type="checkbox" id="chk-mesh"> メッシュ</label>
+    </div>
+
+    <!-- 点選択 & 移動量 & 移動 & 画像調整コントロールバー -->
+    <div class="toolbar">
+        <div class="toolbar-group">
+            <span style="font-size:14px; font-weight:bold; margin-right:2px;">点選択:</span>
+            <button class="btn-pt" data-idx="0">1</button>
+            <button class="btn-pt" data-idx="1">2</button>
+            <button class="btn-pt" data-idx="2">3</button>
+            <button class="btn-pt" data-idx="3">4</button>
+            <button class="btn-pt" data-idx="6">5</button>
+            <button class="btn-pt" data-idx="7">6</button>
+        </div>
+
+        <div class="toolbar-group">
+            <span style="font-size:14px; font-weight:bold; margin-right:2px;">移動量:</span>
+            <button class="btn-step active" data-step="1">1px</button>
+            <button class="btn-step" data-step="10">10px</button>
+        </div>
+
+        <div class="toolbar-group">
+            <span style="font-size:14px; font-weight:bold; margin-right:2px;">移動:</span>
+            <button id="btn-move-up">▲</button>
+            <button id="btn-move-down">▼</button>
+            <button id="btn-move-left">◀</button>
+            <button id="btn-move-right">▶</button>
+        </div>
+
+        <!-- 明るさ（ガンマ変換）・コントラスト スライダー (範囲: -50 ～ 50) -->
+        <div class="toolbar-group">
+            <label class="slider-label">明るさ(ガンマ):
+                <input type="range" id="slider-brightness" min="-50" max="50" value="0">
+                <span id="val-brightness" class="val-disp">0</span>
+            </label>
+            <label class="slider-label" style="margin-left:4px;">コントラスト:
+                <input type="range" id="slider-contrast" min="-50" max="50" value="0">
+                <span id="val-contrast" class="val-disp">0</span>
+            </label>
+            <button id="btn-reset-adj" style="font-size:12px; margin-left:4px;">リセット</button>
+        </div>
+    </div>
+
+    <div class="responsive-box">
+        <div class="canvas-panel-left">
+            <h3>元画像</h3>
+            <canvas id="canvas-left" tabindex="0"></canvas>
+        </div>
+        <div class="canvas-panel-right">
+            <h3>変換結果 (白銀比)</h3>
+            <canvas id="canvas-right"></canvas>
+        </div>
+    </div>
+    <div id="status-text" style="margin-top:10px;">Wasmモジュール読み込み中...</div>
+
+    <script>
+        let Module = null;
+        let processor = null;
+        let points = [];
+        let selectedIdx = 0;
+        let draggingIdx = -1;
+        let moveStep = 1;
+        let brightnessVal = 0;
+        let contrastVal = 0;
+        let loadedImageData = null;
+        let loadedFileName = "image";
+
+        const keyToIdxMap = { '1': 0, '2': 1, '3': 2, '4': 3, '5': 6, '6': 7 };
+        const pointLabels = ["1", "2", "3", "4", "3", "4", "5", "6"];
+
+        const initWasm = typeof createModule === "function" ? createModule : (typeof VisioCraftModule === "function" ? VisioCraftModule : null);
+
+        if (!initWasm) {
+            document.getElementById("status-text").innerText = "エラー: Wasm初期化関数が見つかりません。visiocraft.js のビルドオプションを確認してください。";
+        } else {
+            initWasm().then(mod => {
+                Module = mod;
+                processor = new Module.ImageProcessor();
+                document.getElementById("status-text").innerText = "準備完了: 画像ファイルを開いてください";
+                initEventListeners();
+            }).catch(err => {
+                console.error("WASM初期化エラー:", err);
+                document.getElementById("status-text").innerText = "エラー: WASM読み込み失敗 (" + err.message + ")";
+            });
+        }
+
+        // --- ガンマ補正 ＋ コントラスト変換ルックアップテーブル (LUT) 生成 ---
+        function createAdjustLUT(bVal, cVal) {
+            const lut = new Uint8Array(256);
+            const gamma = Math.pow(2, -bVal / 50);
+            const factor = (259 * (cVal + 255)) / (255 * (259 - cVal));
+
+            for (let i = 0; i < 256; i++) {
+                let v = 255 * Math.pow(i / 255, gamma);
+                v = factor * (v - 128) + 128;
+                lut[i] = Math.min(255, Math.max(0, Math.round(v)));
+            }
+            return lut;
+        }
+
+        function applyLUT(srcImageData, lut) {
+            const dst = new ImageData(new Uint8ClampedArray(srcImageData.data), srcImageData.width, srcImageData.height);
+            const data = dst.data;
+            for (let i = 0; i < data.length; i += 4) {
+                data[i]     = lut[data[i]];     // R
+                data[i + 1] = lut[data[i + 1]]; // G
+                data[i + 2] = lut[data[i + 2]]; // B
+            }
+            return dst;
+        }
+
+        function initEventListeners() {
+            const fileInput = document.getElementById("file-input");
+            const jsonInput = document.getElementById("json-input");
+            const cLeft = document.getElementById("canvas-left");
+
+            document.getElementById("btn-open").addEventListener("click", () => fileInput.click());
+            document.getElementById("btn-load-json").addEventListener("click", () => jsonInput.click());
+
+            // 1. 画像読み込み
+            fileInput.addEventListener("change", async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const statusText = document.getElementById("status-text");
+                statusText.innerText = "画像を読み込み中...";
+
+                loadedFileName = file.name.substring(0, file.name.lastIndexOf(".")) || file.name;
+
+                try {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const byteArray = new Uint8Array(arrayBuffer);
+
+                    const ptr = Module._malloc(byteArray.length);
+                    Module.HEAPU8.set(byteArray, ptr);
+
+                    const success = processor.loadImageFromMemory(ptr, byteArray.length);
+                    Module._free(ptr);
+
+                    if (!success) {
+                        alert("画像のデコードに失敗しました");
+                        statusText.innerText = "エラー: 画像のデコードに失敗しました";
+                    } else {
+                        resetPoints();
+                        updateSourceCanvas();
+                        updateTransformation();
+                        statusText.innerText = "画像を読み込みました";
+                    }
+                } finally {
+                    fileInput.value = "";
+                }
+            });
+
+            // 2. マウス操作・ドラッグ移動
+            cLeft.addEventListener("mousedown", (e) => {
+                const rect = cLeft.getBoundingClientRect();
+                const scaleX = cLeft.width / rect.width;
+                const scaleY = cLeft.height / rect.height;
+                const mx = (e.clientX - rect.left) * scaleX;
+                const my = (e.clientY - rect.top) * scaleY;
+
+                points.forEach((p, idx) => {
+                    const dist = Math.hypot(p.x - mx, p.y - my);
+                    if (dist < 20 * scaleX) {
+                        draggingIdx = idx;
+                        selectPoint(idx);
+                    }
+                });
+                redrawLeftCanvas();
+            });
+
+            cLeft.addEventListener("mousemove", (e) => {
+                if (draggingIdx < 0) return;
+                const rect = cLeft.getBoundingClientRect();
+                const scaleX = cLeft.width / rect.width;
+                const scaleY = cLeft.height / rect.height;
+                
+                const newX = (e.clientX - rect.left) * scaleX;
+                const newY = (e.clientY - rect.top) * scaleY;
+
+                const linkedIndices = getLinkedPointIndices(draggingIdx);
+                linkedIndices.forEach(idx => {
+                    points[idx].x = newX;
+                    points[idx].y = newY;
+                });
+
+                redrawLeftCanvas();
+                updateTransformation();
+            });
+
+            window.addEventListener("mouseup", () => { draggingIdx = -1; });
+
+            // 3. キーボード操作
+            window.addEventListener("keydown", (e) => {
+                if (["INPUT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
+
+                if (keyToIdxMap.hasOwnProperty(e.key)) {
+                    selectPoint(keyToIdxMap[e.key]);
+                    redrawLeftCanvas();
+                    return;
+                }
+
+                if (selectedIdx < 0 || selectedIdx >= points.length) return;
+
+                const step = e.shiftKey ? 10 : 1;
+                let moved = false;
+
+                if (e.key === "ArrowLeft") { movePoint(selectedIdx, -step, 0); moved = true; }
+                if (e.key === "ArrowRight") { movePoint(selectedIdx, step, 0); moved = true; }
+                if (e.key === "ArrowUp") { movePoint(selectedIdx, 0, -step); moved = true; }
+                if (e.key === "ArrowDown") { movePoint(selectedIdx, 0, step); moved = true; }
+
+                if (moved) {
+                    e.preventDefault();
+                    redrawLeftCanvas();
+                    updateTransformation();
+                }
+            });
+
+            // 4. 点選択ボタン（1〜6）
+            document.querySelectorAll(".btn-pt").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const idx = parseInt(btn.getAttribute("data-idx"), 10);
+                    selectPoint(idx);
+                    redrawLeftCanvas();
+                });
+            });
+
+            // 5. 画面の移動量切り替えボタン (1px / 10px)
+            document.querySelectorAll(".btn-step").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    moveStep = parseInt(btn.getAttribute("data-step"), 10);
+                    document.querySelectorAll(".btn-step").forEach(b => b.classList.remove("active"));
+                    btn.classList.add("active");
+                });
+            });
+
+            // 6. 画面の移動ボタン（▲ ▼ ◀ ▶）
+            document.getElementById("btn-move-left").addEventListener("click", () => doMove(-moveStep, 0));
+            document.getElementById("btn-move-right").addEventListener("click", () => doMove(moveStep, 0));
+            document.getElementById("btn-move-up").addEventListener("click", () => doMove(0, -moveStep));
+            document.getElementById("btn-move-down").addEventListener("click", () => doMove(0, moveStep));
+
+            function doMove(dx, dy) {
+                if (selectedIdx < 0 || selectedIdx >= points.length) return;
+                movePoint(selectedIdx, dx, dy);
+                redrawLeftCanvas();
+                updateTransformation();
+            }
+
+            // 7. 明るさ(ガンマ)・コントラストスライダー
+            const sliderBrightness = document.getElementById("slider-brightness");
+            const sliderContrast = document.getElementById("slider-contrast");
+            const valBrightness = document.getElementById("val-brightness");
+            const valContrast = document.getElementById("val-contrast");
+
+            sliderBrightness.addEventListener("input", (e) => {
+                brightnessVal = parseInt(e.target.value, 10);
+                valBrightness.innerText = brightnessVal;
+                updateTransformation();
+            });
+
+            sliderContrast.addEventListener("input", (e) => {
+                contrastVal = parseInt(e.target.value, 10);
+                valContrast.innerText = contrastVal;
+                updateTransformation();
+            });
+
+            document.getElementById("btn-reset-adj").addEventListener("click", () => {
+                brightnessVal = 0;
+                contrastVal = 0;
+                sliderBrightness.value = 0;
+                sliderContrast.value = 0;
+                valBrightness.innerText = "0";
+                valContrast.innerText = "0";
+                updateTransformation();
+            });
+
+            // 8. 回転ボタン
+            document.getElementById("btn-rot-l").addEventListener("click", () => rotate(0));
+            document.getElementById("btn-rot-r").addEventListener("click", () => rotate(1));
+
+            // 9. 印刷ボタン
+            document.getElementById("btn-print").addEventListener("click", () => {
+                window.print();
+            });
+
+            // 10. チェックボックス切替
+            document.getElementById("chk-fold").addEventListener("change", updateTransformation);
+            document.getElementById("chk-mesh").addEventListener("change", () => {
+                redrawLeftCanvas();
+                updateTransformation();
+            });
+
+            // 11. 変換画像保存
+            document.getElementById("btn-save-img").addEventListener("click", async () => {
+                const cRight = document.getElementById("canvas-right");
+                
+                const blob = await new Promise(resolve => cRight.toBlob(resolve, "image/png"));
+                if (!blob) return;
+
+                if ("showSaveFilePicker" in window) {
+                    try {
+                        const handle = await window.showSaveFilePicker({
+                            suggestedName: `${loadedFileName}_transformed.png`,
+                            types: [{
+                                description: "PNG Image",
+                                accept: { "image/png": [".png"] }
+                            }]
+                        });
+                        const writable = await handle.createWritable();
+                        await writable.write(blob);
+                        await writable.close();
+                        return;
+                    } catch (err) {
+                        if (err.name === "AbortError") return;
+                        console.warn("showSaveFilePicker 失敗のため従来方式にフォールバック:", err);
+                    }
+                }
+
+                const link = document.createElement("a");
+                link.download = `${loadedFileName}_transformed.png`;
+                link.href = URL.createObjectURL(blob);
+                link.click();
+                setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+            });
+
+            // 12. 座標 JSON 保存
+            document.getElementById("btn-save-json").addEventListener("click", async () => {
+                const saveData = {
+                    imageWidth: processor.getWidth(),
+                    imageHeight: processor.getHeight(),
+                    points: points
+                };
+
+                const jsonStr = JSON.stringify(saveData, null, 2);
+                const blob = new Blob([jsonStr], { type: "application/json" });
+                const defaultJsonName = `${loadedFileName}.json`;
+
+                if ("showSaveFilePicker" in window) {
+                    try {
+                        const handle = await window.showSaveFilePicker({
+                            suggestedName: defaultJsonName,
+                            types: [{
+                                description: "JSON File",
+                                accept: { "application/json": [".json"] }
+                            }]
+                        });
+                        const writable = await handle.createWritable();
+                        await writable.write(blob);
+                        await writable.close();
+                        return;
+                    } catch (err) {
+                        if (err.name === "AbortError") return;
+                        console.warn("showSaveFilePicker 失敗のため従来方式にフォールバック:", err);
+                    }
+                }
+
+                const link = document.createElement("a");
+                link.download = defaultJsonName;
+                link.href = URL.createObjectURL(blob);
+                link.click();
+                setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+            });
+
+            // 13. 座標 JSON 読込
+            jsonInput.addEventListener("change", async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const statusText = document.getElementById("status-text");
+
+                try {
+                    const text = await file.text();
+                    const loadedData = JSON.parse(text);
+
+                    let loadedPoints = null;
+                    let jsonImageWidth = null;
+                    let jsonImageHeight = null;
+
+                    if (Array.isArray(loadedData)) {
+                        loadedPoints = loadedData;
+                    } else if (loadedData && Array.isArray(loadedData.points)) {
+                        loadedPoints = loadedData.points;
+                        jsonImageWidth = loadedData.imageWidth;
+                        jsonImageHeight = loadedData.imageHeight;
+                    }
+
+                    if (!loadedPoints || loadedPoints.length !== 8 || !loadedPoints.every(p => typeof p.x === "number" && typeof p.y === "number")) {
+                        statusText.innerText = "エラー: 座標JSONのフォーマットが不正です (8つの頂点座標が必要です)。";
+                        return;
+                    }
+
+                    const currentW = processor.getWidth();
+                    const currentH = processor.getHeight();
+
+                    if (jsonImageWidth !== null && jsonImageHeight !== null) {
+                        if (jsonImageWidth !== currentW || jsonImageHeight !== currentH) {
+                            statusText.innerText = `エラー: 座標ファイルの画像サイズ (${jsonImageWidth}x${jsonImageHeight}) が現在の画像 (${currentW}x${currentH}) と一致しないため読み込みを中止しました。`;
+                            return;
+                        }
+                    }
+
+                    points = loadedPoints;
+                    selectPoint(0);
+                    redrawLeftCanvas();
+                    updateTransformation();
+                    statusText.innerText = "座標データを正常に読み込みました。";
+
+                } catch (err) {
+                    console.error("JSON読み込み失敗:", err);
+                    statusText.innerText = "エラー: JSONファイルの読み込みまたは解析に失敗しました。";
+                } finally {
+                    jsonInput.value = "";
+                }
+            });
+        }
+
+        function selectPoint(idx) {
+            selectedIdx = idx;
+            document.querySelectorAll(".btn-pt").forEach(btn => {
+                const btnIdx = parseInt(btn.getAttribute("data-idx"), 10);
+                if (btnIdx === idx || getLinkedPointIndices(idx).includes(btnIdx)) {
+                    btn.classList.add("active");
+                } else {
+                    btn.classList.remove("active");
+                }
+            });
+        }
+
+        function getLinkedPointIndices(idx) {
+            if (idx === 2 || idx === 4) return [2, 4];
+            if (idx === 3 || idx === 5) return [3, 5];
+            return [idx];
+        }
+
+        function movePoint(idx, dx, dy) {
+            const linked = getLinkedPointIndices(idx);
+            linked.forEach(i => {
+                points[i].x += dx;
+                points[i].y += dy;
+            });
+        }
+
+        function resetPoints() {
+            const w = processor.getWidth();
+            const h = processor.getHeight();
+            
+            const silverRatio = Math.SQRT2;
+            let boxW = w * 0.7;
+            let boxH = (boxW / 2) * silverRatio;
+            if (boxH > h * 0.8) {
+                boxH = h * 0.8;
+                boxW = (boxH / silverRatio) * 2;
+            }
+
+            const left = (w - boxW) / 2;
+            const right = left + boxW;
+            const top = (h - boxH) / 2;
+            const midY = top + boxH / 2;
+            const bottom = top + boxH;
+
+            points = [
+                {x: left, y: top},
+                {x: right, y: top},
+                {x: left, y: midY},
+                {x: right, y: midY},
+                {x: left, y: midY},
+                {x: right, y: midY},
+                {x: left, y: bottom},
+                {x: right, y: bottom}
+            ];
+            selectPoint(0);
+        }
+
+        function redrawLeftCanvas() {
+            const cLeft = document.getElementById("canvas-left");
+            if (!loadedImageData) return;
+
+            cLeft.width = loadedImageData.width;
+            cLeft.height = loadedImageData.height;
+            const ctx = cLeft.getContext("2d");
+
+            ctx.putImageData(loadedImageData, 0, 0);
+
+            if (points.length < 8) return;
+
+            const scaleFactor = Math.max(1, cLeft.width / 1000);
+
+            ctx.lineWidth = 2 * scaleFactor;
+            ctx.fillStyle = "rgba(0, 229, 255, 0.15)";
+            ctx.strokeStyle = "#00E5FF";
+
+            // --- 上段ポリゴン ---
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            ctx.lineTo(points[1].x, points[1].y);
+            ctx.lineTo(points[3].x, points[3].y);
+            ctx.lineTo(points[2].x, points[2].y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            // --- 下段ポリゴン ---
+            ctx.beginPath();
+            ctx.moveTo(points[4].x, points[4].y);
+            ctx.lineTo(points[5].x, points[5].y);
+            ctx.lineTo(points[7].x, points[7].y);
+            ctx.lineTo(points[6].x, points[6].y);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+
+            // --- 16分割メッシュ ---
+            if (document.getElementById("chk-mesh").checked) {
+                ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+                ctx.lineWidth = 1 * scaleFactor;
+
+                const lerp = (p1, p2, t) => ({
+                    x: p1.x + (p2.x - p1.x) * t,
+                    y: p1.y + (p2.y - p1.y) * t
+                });
+
+                const drawQuadMesh16 = (quad) => {
+                    for (let i = 1; i < 4; i++) {
+                        const u = i / 4;
+                        const pStart = lerp(quad[0], quad[1], u);
+                        const pEnd = lerp(quad[2], quad[3], u);
+                        ctx.beginPath();
+                        ctx.moveTo(pStart.x, pStart.y);
+                        ctx.lineTo(pEnd.x, pEnd.y);
+                        ctx.stroke();
+                    }
+                    for (let j = 1; j < 4; j++) {
+                        const v = j / 4;
+                        const pStart = lerp(quad[0], quad[2], v);
+                        const pEnd = lerp(quad[1], quad[3], v);
+                        ctx.beginPath();
+                        ctx.moveTo(pStart.x, pStart.y);
+                        ctx.lineTo(pEnd.x, pEnd.y);
+                        ctx.stroke();
+                    }
+                };
+
+                drawQuadMesh16([points[0], points[1], points[2], points[3]]);
+                drawQuadMesh16([points[4], points[5], points[6], points[7]]);
+            }
+
+            // --- 頂点ハンドル & 数字ラベル描画 ---
+            const drawnIndices = [0, 1, 2, 3, 6, 7]; // 重複描画を避けるため主要インデックスのみ使用
+            drawnIndices.forEach((idx) => {
+                const p = points[idx];
+                const isSelected = (idx === selectedIdx || getLinkedPointIndices(selectedIdx).includes(idx));
+                const radius = 6 * scaleFactor;
+
+                // 円ハンドルを描画
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+                ctx.fillStyle = isSelected ? "#FFEA00" : "#2979FF";
+                ctx.fill();
+                ctx.strokeStyle = "#00E5FF";
+                ctx.lineWidth = scaleFactor;
+                ctx.stroke();
+
+                // 数字テキストを描画
+                ctx.fillStyle = isSelected ? "#000000" : "#FFFFFF";
+                ctx.font = `bold ${Math.round(10 * scaleFactor)}px sans-serif`;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText(pointLabels[idx], p.x, p.y);
+            });
+        }
+
+        function updateTransformation() {
+            if (!processor || points.length < 8) return;
+
+            const outW = 600;
+            const outH = Math.round(outW * Math.SQRT2);
+
+            if (processor.transformPerspective(points, outW, outH)) {
+                const cRight = document.getElementById("canvas-right");
+                cRight.width = outW;
+                cRight.height = outH;
+
+                const pixelsPtr = processor.getDstPixels();
+                const pixelData = new Uint8ClampedArray(Module.HEAPU8.buffer, pixelsPtr, outW * outH * 4);
+                const imageData = new ImageData(new Uint8ClampedArray(pixelData), outW, outH);
+
+                // ガンマ補正＋コントラストの適用 (右キャンバスのみ)
+                const lut = createAdjustLUT(brightnessVal, contrastVal);
+                const adjustedData = applyLUT(imageData, lut);
+
+                const ctx = cRight.getContext("2d");
+                ctx.putImageData(adjustedData, 0, 0);
+
+                // 折り目ガイド線
+                if (document.getElementById("chk-fold").checked) {
+                    ctx.beginPath();
+                    ctx.strokeStyle = "black";
+                    ctx.lineWidth = 4;
+                    ctx.moveTo(0, outH / 2); ctx.lineTo(15, outH / 2);
+                    ctx.moveTo(outW - 15, outH / 2); ctx.lineTo(outW, outH / 2);
+                    ctx.stroke();
+
+                    ctx.beginPath();
+                    ctx.strokeStyle = "white";
+                    ctx.lineWidth = 2;
+                    ctx.moveTo(0, outH / 2); ctx.lineTo(15, outH / 2);
+                    ctx.moveTo(outW - 15, outH / 2); ctx.lineTo(outW, outH / 2);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        function rotate(dir) {
+            if (!processor) return;
+            processor.rotateImage(dir);
+            resetPoints();
+            updateSourceCanvas();
+            updateTransformation();
+        }
+
+        function updateSourceCanvas() {
+            const w = processor.getWidth();
+            const h = processor.getHeight();
+            const pixelsPtr = processor.getSrcPixels();
+            const pixelData = new Uint8ClampedArray(Module.HEAPU8.buffer, pixelsPtr, w * h * 4);
+            loadedImageData = new ImageData(new Uint8ClampedArray(pixelData), w, h);
+            redrawLeftCanvas();
+        }
+    </script>
+</body>
+</html>
