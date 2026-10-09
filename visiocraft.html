@@ -86,7 +86,7 @@
 
         #canvas-left {
             cursor: crosshair;
-            touch-action: none;
+            touch-action: none; /* スマホ操作時の画面スクロール干渉を防止 */
         }
 
         /* 印刷用スタイル */
@@ -228,7 +228,6 @@
             });
         }
 
-        // --- ガンマ補正 ＋ コントラスト変換ルックアップテーブル (LUT) 生成 ---
         function createAdjustLUT(bVal, cVal) {
             const lut = new Uint8Array(256);
             const gamma = Math.pow(2, -bVal / 50);
@@ -246,9 +245,9 @@
             const dst = new ImageData(new Uint8ClampedArray(srcImageData.data), srcImageData.width, srcImageData.height);
             const data = dst.data;
             for (let i = 0; i < data.length; i += 4) {
-                data[i]     = lut[data[i]];     // R
-                data[i + 1] = lut[data[i + 1]]; // G
-                data[i + 2] = lut[data[i + 2]]; // B
+                data[i]     = lut[data[i]];
+                data[i + 1] = lut[data[i + 1]];
+                data[i + 2] = lut[data[i + 2]];
             }
             return dst;
         }
@@ -295,17 +294,21 @@
                 }
             });
 
-            // 2. マウス操作・ドラッグ移動
-            cLeft.addEventListener("mousedown", (e) => {
+            // ★ 2. ポインター操作（Pointer Events対応：マウス／スマホタッチ共通） ★
+            cLeft.addEventListener("pointerdown", (e) => {
+                cLeft.setPointerCapture(e.pointerId); // 指がキャンバス外へ出てもドラッグを維持
                 const rect = cLeft.getBoundingClientRect();
                 const scaleX = cLeft.width / rect.width;
                 const scaleY = cLeft.height / rect.height;
                 const mx = (e.clientX - rect.left) * scaleX;
                 const my = (e.clientY - rect.top) * scaleY;
 
+                // スマホの指操作用にタップ当たり判定を少し広く調整 (30 * scaleX)
+                const touchHitRadius = 30 * scaleX;
+
                 points.forEach((p, idx) => {
                     const dist = Math.hypot(p.x - mx, p.y - my);
-                    if (dist < 20 * scaleX) {
+                    if (dist < touchHitRadius) {
                         draggingIdx = idx;
                         selectPoint(idx);
                     }
@@ -313,7 +316,7 @@
                 redrawLeftCanvas();
             });
 
-            cLeft.addEventListener("mousemove", (e) => {
+            cLeft.addEventListener("pointermove", (e) => {
                 if (draggingIdx < 0) return;
                 const rect = cLeft.getBoundingClientRect();
                 const scaleX = cLeft.width / rect.width;
@@ -332,7 +335,15 @@
                 updateTransformation();
             });
 
-            window.addEventListener("mouseup", () => { draggingIdx = -1; });
+            const stopDrag = (e) => {
+                if (draggingIdx >= 0) {
+                    try { cLeft.releasePointerCapture(e.pointerId); } catch (_) {}
+                    draggingIdx = -1;
+                }
+            };
+
+            cLeft.addEventListener("pointerup", stopDrag);
+            cLeft.addEventListener("pointercancel", stopDrag);
 
             // 3. キーボード操作
             window.addEventListener("keydown", (e) => {
@@ -691,22 +702,20 @@
             }
 
             // --- 頂点ハンドル & 数字ラベル描画 ---
-            const drawnIndices = [0, 1, 2, 3, 6, 7]; // 重複描画を避けるため主要インデックスのみ使用
+            const drawnIndices = [0, 1, 2, 3, 6, 7];
             drawnIndices.forEach((idx) => {
                 const p = points[idx];
                 const isSelected = (idx === selectedIdx || getLinkedPointIndices(selectedIdx).includes(idx));
                 const radius = 6 * scaleFactor;
 
-                // 円ハンドルを描画
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
                 ctx.fillStyle = isSelected ? "#FFEA00" : "#2979FF";
                 ctx.fill();
                 ctx.strokeStyle = "#00E5FF";
-                ctx.lineWidth = scaleFactor;
+                ctx.lineWidth = 2 * scaleFactor;
                 ctx.stroke();
 
-                // 数字テキストを描画
                 ctx.fillStyle = isSelected ? "#000000" : "#FFFFFF";
                 ctx.font = `bold ${Math.round(10 * scaleFactor)}px sans-serif`;
                 ctx.textAlign = "center";
@@ -730,7 +739,6 @@
                 const pixelData = new Uint8ClampedArray(Module.HEAPU8.buffer, pixelsPtr, outW * outH * 4);
                 const imageData = new ImageData(new Uint8ClampedArray(pixelData), outW, outH);
 
-                // ガンマ補正＋コントラストの適用 (右キャンバスのみ)
                 const lut = createAdjustLUT(brightnessVal, contrastVal);
                 const adjustedData = applyLUT(imageData, lut);
 
